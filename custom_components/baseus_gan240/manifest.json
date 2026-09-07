@@ -1,0 +1,24 @@
+{
+  "domain": "baseus_gan240",
+  "name": "Baseus BS-GaN240",
+  "version": "0.1.0",
+  "bluetooth": [
+    {
+      "local_name": "BS-GaN240",
+      "connectable": true
+    }
+  ],
+  "codeowners": [
+    "@VACInc"
+  ],
+  "config_flow": true,
+  "dependencies": [
+    "bluetooth"
+  ],
+  "documentation": "https://github.com/VACInc/baseus-gan240",
+  "integration_type": "device",
+  "iot_class": "local_polling",
+  "requirements": [
+    "bleak-retry-connector==4.7.0"
+  ]
+}
