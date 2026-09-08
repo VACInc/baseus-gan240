@@ -154,6 +154,7 @@ async def test_concurrent_requests_preserve_unknown_and_other_ports():
     assert device.mask == 0xDC27
     assert len(device.writes) == 2
     assert device.queries == 4
+    assert len(device.clients) == 2  # one connection per complete control operation
     assert all(c.closed for c in device.clients)
 
 
@@ -229,12 +230,13 @@ async def test_connection_timeout():
         await BaseusTransport(connect, connect_timeout=0.001).read()
 
 
-async def test_disconnect_failure_blocks_control():
+async def test_disconnect_failure_is_reported_after_verified_control():
     device = FakeDevice()
     device.disconnect_fail = True
     with pytest.raises(BaseusError):
         await device.transport().set_port("a", False)
-    assert not device.writes
+    assert len(device.writes) == 1
+    assert device.mask == 0xDC23
 
 
 @pytest.mark.parametrize("phase", ["notify", "query", "control"])
@@ -348,7 +350,7 @@ async def test_close_during_disconnect_drains_owned_cleanup(repeat_cancel):
     await transport.close()  # Idempotent even after cancelling a close caller.
     assert len(disconnects) == 1 and disconnects[0].done()
     assert all(c.closed for c in device.clients)
-    assert not device.writes
+    assert len(device.writes) == 1
     assert not transport._lock.locked()
 
 
@@ -377,7 +379,7 @@ async def test_close_disconnect_timeout_is_bounded():
         await running
     assert stopped.is_set()
     assert not transport._lock.locked()
-    assert not device.writes
+    assert len(device.writes) == 1
 
 
 @pytest.mark.parametrize("late_failed_callback", [False, True])

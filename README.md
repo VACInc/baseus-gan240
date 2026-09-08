@@ -1,12 +1,12 @@
 # Baseus BS-GaN240 for Home Assistant
 
-Local Bluetooth integration for **Baseus CCGAN240CS / BS-GaN240**. Creates four
-switches for USB C1, USB C2, USB C3 and USB A, plus all read-only telemetry
+Local Bluetooth integration for **Baseus CCGAN240CS / BS-GaN240**. Creates five
+switches for DC, USB C1, USB C2, USB C3 and USB A, plus all read-only telemetry
 identified in the vendor app: total and per-output watts, internal temperature,
 negotiated charging protocols, port fault bitmaps, heavy-load and priority-output
 status, display and child-lock state, and Bluetooth/DC module versions. The protocol does not expose
 voltage or current readings, so those are not fabricated from wattage. No cloud
-account, pairing secret, DC switch, restoration or scheduled switching.
+account, pairing secret, restoration or scheduled switching.
 
 ## Status
 
@@ -42,10 +42,10 @@ Home Assistant configuration's `custom_components` directory and restart.
 
 ## Behavior and safety
 
-Switch on clears its disable bit; switch off sets it. C1=0x04, C2=0x08,
-C3=0x10, A=0x20. Every operation first queries actual state and modifies only
-that bit, preserving all other 16-bit mask bits, including 0x01, DC=0x02 and
-unknown high bits. A matching current state causes no control write.
+Switch on clears its disable bit; switch off sets it. DC=0x02, C1=0x04,
+C2=0x08, C3=0x10, A=0x20. Every operation first queries actual state and
+modifies only that bit, preserving all other 16-bit mask bits, including 0x01
+and unknown high bits. A matching current state causes no control write.
 
 One device lock serializes read/modify/write/verify; coordinator publication is
 also serialized. Connection retries happen only before payload transmission.
@@ -72,21 +72,21 @@ BLE connection/proxy slot.
 - ACK: `9AAA10001200010599`. Explicitly **not status** and never `0x0599`.
 
 ACKs, unrelated headers, corrupt CRCs, truncations and concatenated frames do not
-update state. Notifications are not buffered between queries. Each query uses a
-new connection and callback closure, drains subscription-time traffic for 200 ms,
-and accepts only callbacks arriving after its query-write await has returned.
-Control uses a separate subscribed connection and waits for the exact ACK before
-disconnecting. Verification uses another newly connected query, so queued control
-or earlier query notifications cannot fulfill the verification waiter. Readback
-must match the complete mask, not just the requested port.
+update state. Standalone reads use a new connection and callback closure, drain
+subscription-time traffic for 200 ms, and accept only callbacks arriving after
+the query-write await has returned. A control transaction reuses one subscribed
+connection for fresh read, absolute write, exact ACK and fresh verification. Its
+waiter is reset and delayed status traffic is drained between stages. A stale
+pre-write status cannot falsely verify a changed target because full-mask
+readback must equal the new mask, not merely the requested output bit.
 
 ### Important unverified freshness boundary
 
 This reverse-engineered protocol has **no transaction ID or device timestamp**.
 No client can cryptographically or causally prove an arbitrarily delayed,
-identical unsolicited frame is a query response. Connection isolation and the
-post-write callback gate reject known queued/in-flight stale cases; they are not
-an on-wire correlation guarantee. The conservative gate can discard a legitimate
+identical unsolicited frame is a query response. Stage-specific exact frame
+routing, drains and the post-write callback gate reject known queued/in-flight
+stale cases; they are not an on-wire correlation guarantee. The conservative gate can discard a legitimate
 response arriving *during* the BLE write await, especially on a proxy. In that
 case the operation times out rather than accepting ambiguous state. This timing
 must be validated on the intended HA/proxy route before production enablement.
@@ -110,14 +110,15 @@ uv pip install --python .venv/bin/python -r requirements-test.txt
 ```
 
 Tests cover known physical protocol fixtures, every 16-bit mask for both
-operations on all four ports, ACK exclusion, CRC/header/length checks, stale
+operations on all five outputs, ACK exclusion, CRC/header/length checks, stale
 callbacks at subscription and while a query write is in flight, old-connection
 callback isolation, timeouts, concurrent operations, uncertain-write behavior,
 no-op reads, cancellation/unload, fresh state after uncertain writes, HA flow
 validation, switch availability, telemetry decoding, multi-register reads over one
 connection, sensor creation, reload cleanup and redacted diagnostics. Release
-v0.1.1 was live-verified through an ESPHome proxy on all four switches; telemetry
-support in v0.2.0 retains synthetic coverage until its release validation.
+v0.1.1 was live-verified through an ESPHome proxy on the four USB switches;
+telemetry was live-verified in v0.2.1. DC control and the single-connection
+latency improvement require v0.3.0 live validation.
 
 ## Sources checked 2026-09-07
 

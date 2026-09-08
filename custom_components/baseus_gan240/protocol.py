@@ -56,7 +56,7 @@ def parse_status(data: bytes) -> int | None:
 
 
 def mutate_mask(mask: int, port: str, on: bool) -> int:
-    """Change one USB disable bit; retain DC, shutdown and unknown bits."""
+    """Change one output disable bit while retaining every unrelated bit."""
     if not 0 <= mask <= 0xFFFF:
         raise ValueError("Mask must be an unsigned 16-bit integer")
     bit = PORT_BITS[port]

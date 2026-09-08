@@ -57,9 +57,9 @@ async def test_switches_and_diagnostics(hass, entry):
     coordinator.async_set_updated_data(BaseusData(mask=0xDC27))
     entities = []
     await setup_switches(hass, entry, lambda items: entities.extend(items))
-    assert len(entities) == 4
-    assert [e.is_on for e in entities] == [False, True, True, False]
-    assert len({e.unique_id for e in entities}) == 4
+    assert len(entities) == 5
+    assert [e.is_on for e in entities] == [False, False, True, True, False]
+    assert len({e.unique_id for e in entities}) == 5
     assert entities[0].device_info["model"].startswith("CCGAN240CS")
     diagnostics = await async_get_config_entry_diagnostics(hass, entry)
     assert "AA:BB" not in str(diagnostics)

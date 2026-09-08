@@ -57,7 +57,9 @@ def test_every_truncation_and_corrupted_byte():
         assert parse_status(corrupt) is None
 
 
-@pytest.mark.parametrize(("port", "bit"), [("c1", 4), ("c2", 8), ("c3", 16), ("a", 32)])
+@pytest.mark.parametrize(
+    ("port", "bit"), [("dc", 2), ("c1", 4), ("c2", 8), ("c3", 16), ("a", 32)]
+)
 @pytest.mark.parametrize("on", [True, False])
 def test_all_16_bit_mutations(port, bit, on):
     for mask in range(65536):

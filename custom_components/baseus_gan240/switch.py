@@ -1,4 +1,4 @@
-"""Four non-optimistic switches; no DC entity or restore behavior."""
+"""Five non-optimistic output switches; no restore behavior."""
 
 from homeassistant.components.switch import SwitchEntity, SwitchEntityDescription
 from homeassistant.exceptions import HomeAssistantError

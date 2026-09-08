@@ -8,6 +8,6 @@
     "error": {"invalid_address": "Enter a Bluetooth address as AA:BB:CC:DD:EE:FF.", "cannot_connect": "No verified status received. Check power, Bluetooth range and available active proxy slots. Close other charger control apps, then retry."},
     "abort": {"already_configured": "This charger is already configured.", "not_supported": "This is not a connectable BS-GaN240 charger."}
   },
-  "entity": {"switch": {"c1": {"name": "USB C1"}, "c2": {"name": "USB C2"}, "c3": {"name": "USB C3"}, "a": {"name": "USB A"}}},
-  "exceptions": {"control_failed": {"message": "The USB command could not be verified. State is unavailable; the command will not be automatically repeated."}}
+  "entity": {"switch": {"dc": {"name": "DC"}, "c1": {"name": "USB C1"}, "c2": {"name": "USB C2"}, "c3": {"name": "USB C3"}, "a": {"name": "USB A"}}},
+  "exceptions": {"control_failed": {"message": "The output command could not be verified. State is unavailable; the command will not be automatically repeated."}}
 }

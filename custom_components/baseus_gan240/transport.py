@@ -242,51 +242,99 @@ class BaseusTransport:
                 if result is not None:
                     result.cancel()
 
-    async def _write(self, target: int) -> None:
-        """Keep the control connection alive until the exact device ACK arrives.
+    async def _control(self, port: str, on: bool) -> int:
+        """Fresh-read, write, acknowledge and verify over one BLE connection.
 
-        A proxy's write-without-response only queues an API message. It does not
-        prove delivery. ACK proves receipt, not state; _run still reads state
-        over a separate connection and never retries an uncertain write.
+        Reusing the subscribed connection removes two expensive proxy connection
+        establishments. Exact frame routing keeps ACK separate from status, and
+        a post-ACK query still supplies authoritative non-optimistic readback.
         """
         async with self._connection() as (client, disconnected):
-            ack = asyncio.Event()
-            accepting = False
-            lost = None
-            received = None
+            loop = asyncio.get_running_loop()
+            status_result: asyncio.Future | None = None
+            ack_result: asyncio.Future | None = None
+            accepting_status = False
+            accepting_ack = False
 
             def notification(_characteristic, data):
-                if accepting and bytes(data) == ACK:
-                    ack.set()
+                payload = bytes(data)
+                if accepting_ack and ack_result is not None and not ack_result.done():
+                    if payload == ACK:
+                        ack_result.set_result(None)
+                if (
+                    accepting_status
+                    and status_result is not None
+                    and not status_result.done()
+                ):
+                    mask = parse_status(payload)
+                    if mask is not None:
+                        status_result.set_result(mask)
+
+            async def await_result(result: asyncio.Future, missing: str):
+                lost = asyncio.create_task(disconnected.wait())
+                try:
+                    done, _ = await asyncio.wait(
+                        (result, lost), return_when=asyncio.FIRST_COMPLETED
+                    )
+                    if disconnected.is_set() or not client.is_connected:
+                        raise BaseusError("Charger disconnected during control")
+                    if result in done:
+                        return result.result()
+                    raise BaseusError(missing)
+                finally:
+                    lost.cancel()
+                    await asyncio.gather(lost, return_exceptions=True)
+
+            async def query_status(stage: str) -> int:
+                nonlocal accepting_status, status_result
+                status_result = loop.create_future()
+                try:
+                    async with self._stage(stage), asyncio.timeout(self._timeout):
+                        await client.write_gatt_char(WRITE_UUID, QUERY, response=False)
+                        # Preserve the existing freshness barrier: subscription-time
+                        # and write-in-flight frames cannot satisfy this query.
+                        accepting_status = True
+                        return await await_result(status_result, "No fresh status")
+                finally:
+                    accepting_status = False
+                    status_result.cancel()
+                    status_result = None
 
             try:
-                async with self._stage("control_write"), asyncio.timeout(self._timeout):
+                async with self._stage("subscribe"), asyncio.timeout(self._timeout):
                     await client.start_notify(NOTIFY_UUID, notification)
                     await asyncio.sleep(self._drain_time)
-                    # Reject subscription-time frames. Arm before dispatch so a
-                    # legitimate ACK arriving during write completion is retained.
-                    accepting = True
+
+                current = await query_status("control_read")
+                target = mutate_mask(current, port, on)
+                if target == current:
+                    return current
+
+                ack_result = loop.create_future()
+                async with self._stage("control_write"), asyncio.timeout(self._timeout):
+                    # ACK has an exact grammar and the subscription was drained.
+                    # Arm before dispatch so a fast legitimate ACK is retained.
+                    accepting_ack = True
                     await client.write_gatt_char(
                         WRITE_UUID, write_frame(target), response=False
                     )
-                    lost = asyncio.create_task(disconnected.wait())
-                    received = asyncio.create_task(ack.wait())
-                    await asyncio.wait(
-                        (received, lost), return_when=asyncio.FIRST_COMPLETED
-                    )
-                    if disconnected.is_set() or not client.is_connected:
-                        raise BaseusError(
-                            "Disconnected during write; outcome uncertain"
-                        )
-                    if not ack.is_set():
-                        raise BaseusError("Missing control acknowledgment")
+                    await await_result(ack_result, "Missing control acknowledgment")
+
+                accepting_ack = False
+                ack_result.cancel()
+                ack_result = None
+                # Discard any delayed pre-write status before issuing verification.
+                await asyncio.sleep(self._drain_time)
+                observed = await query_status("control_verify")
+                if observed != target:
+                    raise BaseusError("Readback mismatch; write outcome unverified")
+                return observed
             finally:
-                accepting = False
-                tasks = [task for task in (lost, received) if task is not None]
-                for task in tasks:
-                    task.cancel()
-                if tasks:
-                    await asyncio.gather(*tasks, return_exceptions=True)
+                accepting_status = False
+                accepting_ack = False
+                for result in (status_result, ack_result):
+                    if result is not None:
+                        result.cancel()
 
     async def _run(self, port: str | None = None, on: bool = False) -> int:
         async with self._lock:
@@ -294,17 +342,9 @@ class BaseusTransport:
                 raise BaseusError("Integration unloaded")
             self._active = asyncio.current_task()
             try:
-                current = await self._query()
                 if port is None:
-                    return current
-                target = mutate_mask(current, port, on)
-                if current == target:
-                    return current
-                await self._write(target)
-                observed = await self._query()
-                if observed != target:
-                    raise BaseusError("Readback mismatch; write outcome unverified")
-                return observed
+                    return await self._query()
+                return await self._control(port, on)
             except asyncio.CancelledError:
                 raise
             except BaseusError:
