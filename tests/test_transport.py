@@ -53,6 +53,8 @@ class FakeClient:
                 loop.call_later(0.002, self.callback, None, status(self.device.mask))
         else:
             self.device.writes.append(bytes(payload))
+            if self.callback is not None:
+                loop.call_later(0.001, self.callback, None, ACK)
             self.device.mask = int.from_bytes(payload[9:11], "big")
             if self.device.write_fail:
                 raise OSError("uncertain acceptance")
@@ -413,3 +415,162 @@ async def test_legitimate_reply_during_write_still_fails_closed():
         await BaseusTransport(connect, timeout=0.02, drain_time=0).set_port("a", False)
     assert not device.writes
     assert all(c.closed for c in device.clients)
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [TimeoutError("AA:BB:CC:DD:EE:FF secret"), OSError("AA:BB:CC:DD:EE:FF secret")],
+)
+async def test_connect_failure_logs_only_stage_category(caplog, failure):
+    async def connect(_callback):
+        raise failure
+
+    with pytest.raises(BaseusError):
+        await BaseusTransport(connect).read()
+    assert "stage=connect" in caplog.text
+    assert (
+        "category=timeout" in caplog.text
+        if isinstance(failure, TimeoutError)
+        else "category=backend" in caplog.text
+    )
+    assert "AA:BB" not in caplog.text
+    assert "secret" not in caplog.text
+    assert all(record.exc_info is None for record in caplog.records)
+
+
+async def test_silent_status_stage_logged_and_slot_released(caplog):
+    device = FakeDevice()
+    device.silent = True
+    with pytest.raises(BaseusError):
+        await device.transport().read()
+    assert "stage=status_wait category=timeout" in caplog.text
+    assert all(client.closed for client in device.clients)
+    assert not device.writes
+
+
+async def test_missing_gatt_stage_logged(caplog):
+    device = FakeDevice()
+    device.missing = True
+    with pytest.raises(BaseusError):
+        await device.transport().read()
+    assert "stage=validate_gatt category=validation" in caplog.text
+    assert all(client.closed for client in device.clients)
+
+
+async def test_queued_control_waits_for_ack_before_disconnect():
+    device = FakeDevice(4)
+    original_connect = device.connect
+
+    async def connect(callback):
+        client = await original_connect(callback)
+        original_write = client.write_gatt_char
+
+        async def write(uuid, payload, response):
+            if payload == QUERY:
+                return await original_write(uuid, payload, response)
+            device.writes.append(bytes(payload))
+
+            def deliver():
+                if client.closed or client.callback is None:
+                    return
+                device.mask = int.from_bytes(payload[9:11], "big")
+                client.callback(None, ACK)
+
+            asyncio.get_running_loop().call_later(0.002, deliver)
+
+        client.write_gatt_char = write
+        return client
+
+    transport = BaseusTransport(
+        connect, timeout=0.04, connect_timeout=0.04, drain_time=0
+    )
+    assert await transport.set_port("c2", False) == 12
+    assert len(device.writes) == 1
+    assert all(client.closed for client in device.clients)
+
+
+@pytest.mark.parametrize("reply", [None, ACK[:-1] + b"\x00", status(12)])
+async def test_control_requires_exact_post_dispatch_ack(reply):
+    device = FakeDevice(4)
+    original_connect = device.connect
+
+    async def connect(callback):
+        client = await original_connect(callback)
+        original_write = client.write_gatt_char
+
+        async def write(uuid, payload, response):
+            if payload == QUERY:
+                return await original_write(uuid, payload, response)
+            device.writes.append(bytes(payload))
+            if reply is not None:
+                asyncio.get_running_loop().call_later(
+                    0.001, client.callback, None, reply
+                )
+
+        client.write_gatt_char = write
+        return client
+
+    transport = BaseusTransport(
+        connect, timeout=0.02, connect_timeout=0.04, drain_time=0
+    )
+    with pytest.raises(BaseusError):
+        await transport.set_port("c2", False)
+    assert len(device.writes) == 1
+    assert device.queries == 1
+    assert all(client.closed for client in device.clients)
+
+
+async def test_control_ack_during_dispatch_is_retained():
+    device = FakeDevice(4)
+    original_connect = device.connect
+
+    async def connect(callback):
+        client = await original_connect(callback)
+        original_write = client.write_gatt_char
+
+        async def write(uuid, payload, response):
+            if payload == QUERY:
+                return await original_write(uuid, payload, response)
+            device.writes.append(bytes(payload))
+            device.mask = int.from_bytes(payload[9:11], "big")
+            client.callback(None, ACK)
+            await asyncio.sleep(0)
+
+        client.write_gatt_char = write
+        return client
+
+    transport = BaseusTransport(
+        connect, timeout=0.04, connect_timeout=0.04, drain_time=0
+    )
+    assert await transport.set_port("c2", False) == 12
+    assert device.queries == 2
+
+
+async def test_cancel_while_waiting_control_ack_releases_connection():
+    device = FakeDevice(4)
+    sent = asyncio.Event()
+    original_connect = device.connect
+
+    async def connect(callback):
+        client = await original_connect(callback)
+        original_write = client.write_gatt_char
+
+        async def write(uuid, payload, response):
+            if payload == QUERY:
+                return await original_write(uuid, payload, response)
+            device.writes.append(bytes(payload))
+            sent.set()
+
+        client.write_gatt_char = write
+        return client
+
+    transport = BaseusTransport(
+        connect, timeout=0.1, connect_timeout=0.04, drain_time=0
+    )
+    operation = asyncio.create_task(transport.set_port("c2", False))
+    await sent.wait()
+    await transport.close()
+    with pytest.raises(asyncio.CancelledError):
+        await operation
+    assert len(device.writes) == 1
+    assert all(client.closed for client in device.clients)

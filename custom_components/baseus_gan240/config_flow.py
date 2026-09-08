@@ -1,5 +1,6 @@
 """Manual address and narrowly matched Bluetooth discovery configuration."""
 
+import logging
 import re
 
 import voluptuous as vol
@@ -10,6 +11,8 @@ from homeassistant.const import CONF_ADDRESS
 from .const import DOMAIN, LOCAL_NAME
 from .coordinator import make_transport
 from .transport import BaseusError
+
+_LOGGER = logging.getLogger(__name__)
 
 ADDRESS = re.compile(r"^(?:[0-9A-F]{2}:){5}[0-9A-F]{2}$")
 
@@ -37,6 +40,9 @@ class BaseusConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 try:
                     await self._validate()
                 except BaseusError:
+                    _LOGGER.warning(
+                        "Setup status query failed; see transport stage diagnostic"
+                    )
                     errors["base"] = "cannot_connect"
                 else:
                     return self.async_create_entry(
@@ -65,6 +71,9 @@ class BaseusConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             try:
                 await self._validate()
             except BaseusError:
+                _LOGGER.warning(
+                    "Setup status query failed; see transport stage diagnostic"
+                )
                 errors["base"] = "cannot_connect"
             else:
                 return self.async_create_entry(

@@ -8,12 +8,15 @@ transaction ID: see README for the remaining on-wire freshness limitation.
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from typing import Any
 
 from .const import NOTIFY_UUID, SERVICE_UUID, WRITE_UUID
-from .protocol import QUERY, mutate_mask, parse_status, write_frame
+from .protocol import ACK, QUERY, mutate_mask, parse_status, write_frame
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class BaseusError(Exception):
@@ -58,6 +61,26 @@ class BaseusTransport:
         self._close_task: asyncio.Task | None = None
 
     @asynccontextmanager
+    async def _stage(self, stage: str):
+        """Log only constant stage names and allowlisted error categories."""
+        try:
+            yield
+        except asyncio.CancelledError:
+            raise
+        except Exception as err:
+            category = (
+                "timeout"
+                if isinstance(err, TimeoutError)
+                else "validation"
+                if isinstance(err, BaseusError)
+                else "backend"
+            )
+            _LOGGER.warning(
+                "Bluetooth transaction failed: stage=%s category=%s", stage, category
+            )
+            raise
+
+    @asynccontextmanager
     async def _connection(self):
         client = None
         disconnected = asyncio.Event()
@@ -70,22 +93,23 @@ class BaseusTransport:
                 disconnected.set()
 
         try:
-            async with asyncio.timeout(self._connect_timeout):
+            async with self._stage("connect"), asyncio.timeout(self._connect_timeout):
                 client = await self._connector(on_disconnected)
-            if not client.is_connected:
-                raise BaseusError("Charger disconnected during establishment")
-            service = client.services.get_service(SERVICE_UUID)
-            if service is None:
-                raise BaseusError("Required charger service missing")
-            write = service.get_characteristic(WRITE_UUID)
-            notify = service.get_characteristic(NOTIFY_UUID)
-            if (
-                write is None
-                or notify is None
-                or "write-without-response" not in write.properties
-                or "notify" not in notify.properties
-            ):
-                raise BaseusError("Required charger characteristics missing")
+            async with self._stage("validate_gatt"):
+                if not client.is_connected:
+                    raise BaseusError("Charger disconnected during establishment")
+                service = client.services.get_service(SERVICE_UUID)
+                if service is None:
+                    raise BaseusError("Required charger service missing")
+                write = service.get_characteristic(WRITE_UUID)
+                notify = service.get_characteristic(NOTIFY_UUID)
+                if (
+                    write is None
+                    or notify is None
+                    or "write-without-response" not in write.properties
+                    or "notify" not in notify.properties
+                ):
+                    raise BaseusError("Required charger characteristics missing")
             yield client, disconnected
         finally:
             if client is not None:
@@ -94,7 +118,7 @@ class BaseusTransport:
                 await _await_owned(asyncio.create_task(self._disconnect(client)))
 
     async def _disconnect(self, client) -> None:
-        async with asyncio.timeout(self._timeout):
+        async with self._stage("disconnect"), asyncio.timeout(self._timeout):
             await client.disconnect()
 
     async def _query(self) -> int:
@@ -112,15 +136,19 @@ class BaseusTransport:
                         result.set_result(mask)
 
             lost = None
+            stage = "subscribe"
             try:
                 async with asyncio.timeout(self._timeout):
                     await client.start_notify(NOTIFY_UUID, notification)
+                    stage = "drain"
                     await asyncio.sleep(self._drain_time)
+                    stage = "query_write"
                     await client.write_gatt_char(WRITE_UUID, QUERY, response=False)
                     # Conservative barrier: reject even responses delivered while
                     # the write is pending. A fast legitimate response may time out
                     # rather than accepting an unproven pre-query notification.
                     accepting = True
+                    stage = "status_wait"
                     lost = asyncio.create_task(disconnected.wait())
                     done, _ = await asyncio.wait(
                         (result, lost), return_when=asyncio.FIRST_COMPLETED
@@ -130,12 +158,61 @@ class BaseusTransport:
                     if result in done:
                         return result.result()
                     raise BaseusError("No fresh status")
+            except Exception:
+                async with self._stage(stage):
+                    raise
             finally:
                 accepting = False
                 result.cancel()
                 if lost is not None:
                     lost.cancel()
                     await asyncio.gather(lost, return_exceptions=True)
+
+    async def _write(self, target: int) -> None:
+        """Keep the control connection alive until the exact device ACK arrives.
+
+        A proxy's write-without-response only queues an API message. It does not
+        prove delivery. ACK proves receipt, not state; _run still reads state
+        over a separate connection and never retries an uncertain write.
+        """
+        async with self._connection() as (client, disconnected):
+            ack = asyncio.Event()
+            accepting = False
+            lost = None
+            received = None
+
+            def notification(_characteristic, data):
+                if accepting and bytes(data) == ACK:
+                    ack.set()
+
+            try:
+                async with self._stage("control_write"), asyncio.timeout(self._timeout):
+                    await client.start_notify(NOTIFY_UUID, notification)
+                    await asyncio.sleep(self._drain_time)
+                    # Reject subscription-time frames. Arm before dispatch so a
+                    # legitimate ACK arriving during write completion is retained.
+                    accepting = True
+                    await client.write_gatt_char(
+                        WRITE_UUID, write_frame(target), response=False
+                    )
+                    lost = asyncio.create_task(disconnected.wait())
+                    received = asyncio.create_task(ack.wait())
+                    await asyncio.wait(
+                        (received, lost), return_when=asyncio.FIRST_COMPLETED
+                    )
+                    if disconnected.is_set() or not client.is_connected:
+                        raise BaseusError(
+                            "Disconnected during write; outcome uncertain"
+                        )
+                    if not ack.is_set():
+                        raise BaseusError("Missing control acknowledgment")
+            finally:
+                accepting = False
+                tasks = [task for task in (lost, received) if task is not None]
+                for task in tasks:
+                    task.cancel()
+                if tasks:
+                    await asyncio.gather(*tasks, return_exceptions=True)
 
     async def _run(self, port: str | None = None, on: bool = False) -> int:
         async with self._lock:
@@ -149,16 +226,7 @@ class BaseusTransport:
                 target = mutate_mask(current, port, on)
                 if current == target:
                     return current
-                async with self._connection() as (client, disconnected):
-                    async with asyncio.timeout(self._timeout):
-                        # Exactly one attempt. Transport acceptance is not state.
-                        await client.write_gatt_char(
-                            WRITE_UUID, write_frame(target), response=False
-                        )
-                        if disconnected.is_set() or not client.is_connected:
-                            raise BaseusError(
-                                "Disconnected during write; outcome uncertain"
-                            )
+                await self._write(target)
                 observed = await self._query()
                 if observed != target:
                     raise BaseusError("Readback mismatch; write outcome unverified")
