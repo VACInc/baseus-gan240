@@ -8,15 +8,21 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.update_coordinator import UpdateFailed
 
 from custom_components.baseus_gan240 import async_setup_entry, async_unload_entry
+from custom_components.baseus_gan240.binary_sensor import (
+    async_setup_entry as setup_binary_sensors,
+)
 from custom_components.baseus_gan240.config_flow import BaseusConfigFlow
 from custom_components.baseus_gan240.const import DOMAIN
 from custom_components.baseus_gan240.coordinator import (
     BaseusCoordinator,
+    decode_data,
     make_transport,
 )
 from custom_components.baseus_gan240.diagnostics import (
     async_get_config_entry_diagnostics,
 )
+from custom_components.baseus_gan240.models import BaseusData
+from custom_components.baseus_gan240.sensor import async_setup_entry as setup_sensors
 from custom_components.baseus_gan240.switch import BaseusSwitch
 from custom_components.baseus_gan240.switch import async_setup_entry as setup_switches
 from custom_components.baseus_gan240.transport import BaseusError
@@ -48,7 +54,7 @@ async def hass(tmp_path):
 async def test_switches_and_diagnostics(hass, entry):
     coordinator = BaseusCoordinator(hass, entry)
     entry.runtime_data = coordinator
-    coordinator.async_set_updated_data(0xDC27)
+    coordinator.async_set_updated_data(BaseusData(mask=0xDC27))
     entities = []
     await setup_switches(hass, entry, lambda items: entities.extend(items))
     assert len(entities) == 4
@@ -66,19 +72,82 @@ async def test_switches_and_diagnostics(hass, entry):
     await coordinator.async_shutdown()
 
 
+async def test_all_telemetry_entities_and_decoder(hass, entry):
+    registers = {
+        "0012": (1, 0xDC27),
+        "001E": (10, 1234),
+        "001C": (10, 101),
+        "001B": (10, 202),
+        "001A": (10, 303),
+        "0019": (10, 404),
+        "001D": (10, 505),
+        "000B": (1, (130 << 8) | 120),
+        "0017": (1, (2 << 8) | 1),
+        "0018": (1, (6 << 8) | 8),
+        "0011": (1, 1),
+        "0010": (1, 2),
+        "000F": (1, 4),
+        "000E": (1, 8),
+        "000D": (1, 16),
+        "0014": (1, 3),
+        "0016": (1, 0x1234),
+        "0015": (1, 0x1234),
+        "0024": (1, 0),
+        "0029": (1, 1),
+    }
+    data = decode_data(registers)
+    assert data.mask == 0xDC27
+    assert data.total_power == 123.4
+    assert data.port_power == {
+        "c1": 10.1,
+        "c2": 20.2,
+        "c3": 30.3,
+        "a": 40.4,
+        "dc": 50.5,
+    }
+    assert data.temperature == 30
+    assert data.protocols == {
+        "c1": "PD3.1",
+        "c2": "PD3.0",
+        "c3": "PPS",
+        "a": "Apple 2.4A",
+    }
+    assert data.errors == {"c1": 1, "c2": 2, "c3": 4, "a": 8, "dc": 16}
+    assert data.bluetooth_module_version == "1.2.52"
+    assert data.dc_module_version == "12.52"
+    assert data.screen_on and data.child_lock
+
+    coordinator = BaseusCoordinator(hass, entry)
+    coordinator.async_set_updated_data(data)
+    entry.runtime_data = coordinator
+    sensors = []
+    binary_sensors = []
+    await setup_sensors(hass, entry, lambda items: sensors.extend(items))
+    await setup_binary_sensors(hass, entry, lambda items: binary_sensors.extend(items))
+    assert len(sensors) == 19
+    assert len(binary_sensors) == 2
+    values = {entity.entity_description.key: entity.native_value for entity in sensors}
+    assert values["total_power"] == 123.4
+    assert values["c2_power"] == 20.2
+    assert values["a_protocol"] == "Apple 2.4A"
+    assert values["dc_error"] == 16
+    assert [entity.is_on for entity in binary_sensors] == [True, True]
+    await coordinator.async_shutdown()
+
+
 async def test_service_nonoptimistic_failure_and_recovery(hass, entry):
     coordinator = BaseusCoordinator(hass, entry)
     coordinator.transport = SimpleNamespace(
         set_port=AsyncMock(side_effect=BaseusError("failed")),
-        read=AsyncMock(return_value=4),
+        read_registers=AsyncMock(),
         close=AsyncMock(),
     )
-    coordinator.async_set_updated_data(0)
+    coordinator.async_set_updated_data(BaseusData(mask=0))
     entity = BaseusSwitch(coordinator, entry, "c1")
     with pytest.raises(HomeAssistantError):
         await entity.async_turn_off()
     assert entity.is_on is None and not entity.available
-    assert coordinator.data == 0  # no guessed mask was published
+    assert coordinator.data.mask == 0  # no guessed mask was published
     coordinator.transport.set_port = AsyncMock(return_value=4)
     await entity.async_turn_off()
     assert entity.is_on is False and entity.available
@@ -90,7 +159,7 @@ async def test_service_nonoptimistic_failure_and_recovery(hass, entry):
 
 async def test_poll_failure(hass, entry):
     coordinator = BaseusCoordinator(hass, entry)
-    coordinator.transport.read = AsyncMock(side_effect=BaseusError("offline"))
+    coordinator.transport.read_registers = AsyncMock(side_effect=BaseusError("offline"))
     with pytest.raises(UpdateFailed):
         await coordinator._async_update_data()
     await coordinator.async_shutdown()

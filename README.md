@@ -1,8 +1,12 @@
 # Baseus BS-GaN240 for Home Assistant
 
-Local Bluetooth integration for **Baseus CCGAN240CS / BS-GaN240**. Creates
-exactly four switches: USB C1, USB C2, USB C3 and USB A. No DC entity, cloud
-account, pairing secret, power telemetry, restoration or scheduled switching.
+Local Bluetooth integration for **Baseus CCGAN240CS / BS-GaN240**. Creates four
+switches for USB C1, USB C2, USB C3 and USB A, plus all read-only telemetry
+identified in the vendor app: total and per-output watts, internal temperature,
+negotiated charging protocols, port fault bitmaps, priority output, display and
+child-lock state, and Bluetooth/DC module versions. The protocol does not expose
+voltage or current readings, so those are not fabricated from wattage. No cloud
+account, pairing secret, DC switch, restoration or scheduled switching.
 
 ## Status
 
@@ -49,16 +53,19 @@ There is exactly one control-write attempt. A timeout, disconnect, cancellation,
 malformed status or readback mismatch fails visibly and does not retry the
 control command. A subsequent request must obtain a new read before deciding
 whether a write is needed. No optimistic state and no automatic restoration.
-Setup and each 60-second poll are read-only. Poll errors make all switches
-unavailable; successful subsequent reads recover availability. An idle disconnect
-is normal because each transaction releases its BLE connection/proxy slot.
+Setup and each 60-second poll are read-only. A poll reads all telemetry registers
+sequentially over one owned connection and notification subscription. Poll errors
+make the integration entities unavailable; successful subsequent reads recover
+availability. An idle disconnect is normal because each transaction releases its
+BLE connection/proxy slot.
 
 ### Exact protocol
 
 - GATT service: `0000ae30-0000-1000-8000-00805f9b34fb`
 - WriteWithoutResponse: `0000ae01-0000-1000-8000-00805f9b34fb`
 - Notify: `0000ae02-0000-1000-8000-00805f9b34fb`
-- Query: `9AAA0300120001C61C`
+- Register query: `9AAA03`, 2-byte register code, `0001`, CRC. The switch mask
+  query is `9AAA0300120001C61C`.
 - Status: exactly 11 bytes, `9AAA0300120201`, 2-byte big-endian disable
   mask, CRC-16/MODBUS with high byte first.
 - Write body: `9AAA10001200010201`, 2-byte mask, same CRC.
@@ -68,10 +75,10 @@ ACKs, unrelated headers, corrupt CRCs, truncations and concatenated frames do no
 update state. Notifications are not buffered between queries. Each query uses a
 new connection and callback closure, drains subscription-time traffic for 200 ms,
 and accepts only callbacks arriving after its query-write await has returned.
-Control uses a separate connection with no status subscription. Verification uses
-another newly connected query, so queued control or earlier query notifications
-cannot fulfill the verification waiter. Readback must match the complete mask,
-not just the requested port.
+Control uses a separate subscribed connection and waits for the exact ACK before
+disconnecting. Verification uses another newly connected query, so queued control
+or earlier query notifications cannot fulfill the verification waiter. Readback
+must match the complete mask, not just the requested port.
 
 ### Important unverified freshness boundary
 
@@ -89,7 +96,8 @@ The device protocol is also not compare-and-swap: an external app changing bits
 between the fresh read and absolute write can race us. Close other controllers.
 A retained global shutdown bit may affect physical USB output even when a USB's
 own disable bit is clear; the integration preserves rather than interprets it.
-State represents protocol disable bits, not measured voltage or power delivery.
+Switch state represents protocol disable bits, not measured voltage delivery.
+Power sensors are separate register readings reported by the charger.
 
 ## Tests
 
@@ -106,9 +114,10 @@ operations on all four ports, ACK exclusion, CRC/header/length checks, stale
 callbacks at subscription and while a query write is in flight, old-connection
 callback isolation, timeouts, concurrent operations, uncertain-write behavior,
 no-op reads, cancellation/unload, fresh state after uncertain writes, HA flow
-validation, switch availability, reload cleanup and redacted diagnostics.
-HA-facing tests mock framework dispatch and BLE I/O; a full running-HA end-to-end
-flow, HACS validation and physical ESPHome control remain unverified.
+validation, switch availability, telemetry decoding, multi-register reads over one
+connection, sensor creation, reload cleanup and redacted diagnostics. Release
+v0.1.1 was live-verified through an ESPHome proxy on all four switches; telemetry
+support in v0.2.0 retains synthetic coverage until its release validation.
 
 ## Sources checked 2026-09-07
 

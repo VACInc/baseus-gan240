@@ -14,7 +14,15 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from .const import NOTIFY_UUID, SERVICE_UUID, WRITE_UUID
-from .protocol import ACK, QUERY, mutate_mask, parse_status, write_frame
+from .protocol import (
+    ACK,
+    QUERY,
+    mutate_mask,
+    parse_register,
+    parse_status,
+    query_frame,
+    write_frame,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -168,6 +176,72 @@ class BaseusTransport:
                     lost.cancel()
                     await asyncio.gather(lost, return_exceptions=True)
 
+    async def _query_registers(
+        self, codes: tuple[str, ...]
+    ) -> dict[str, tuple[int, int]]:
+        """Read several registers over one owned subscription and connection."""
+        async with self._connection() as (client, disconnected):
+            accepting = False
+            expected: str | None = None
+            result: asyncio.Future | None = None
+
+            def notification(_characteristic, data):
+                parsed = parse_register(bytes(data))
+                if (
+                    accepting
+                    and parsed is not None
+                    and parsed[0] == expected
+                    and result is not None
+                    and not result.done()
+                ):
+                    result.set_result(parsed[1:])
+
+            stage = "subscribe"
+            try:
+                async with asyncio.timeout(self._timeout):
+                    await client.start_notify(NOTIFY_UUID, notification)
+                    stage = "drain"
+                    await asyncio.sleep(self._drain_time)
+
+                values: dict[str, tuple[int, int]] = {}
+                for code in codes:
+                    result = asyncio.get_running_loop().create_future()
+                    expected = code
+                    accepting = False
+                    lost = None
+                    try:
+                        stage = "register_write"
+                        async with asyncio.timeout(self._timeout):
+                            await client.write_gatt_char(
+                                WRITE_UUID, query_frame(code), response=False
+                            )
+                            accepting = True
+                            stage = "register_wait"
+                            lost = asyncio.create_task(disconnected.wait())
+                            done, _ = await asyncio.wait(
+                                (result, lost), return_when=asyncio.FIRST_COMPLETED
+                            )
+                            if disconnected.is_set() or not client.is_connected:
+                                raise BaseusError("Charger disconnected during query")
+                            if result not in done:
+                                raise BaseusError("No fresh register response")
+                            values[code] = result.result()
+                    finally:
+                        if lost is not None:
+                            lost.cancel()
+                            await asyncio.gather(lost, return_exceptions=True)
+                    accepting = False
+                    result = None
+                    expected = None
+                return values
+            except Exception:
+                async with self._stage(stage):
+                    raise
+            finally:
+                accepting = False
+                if result is not None:
+                    result.cancel()
+
     async def _write(self, target: int) -> None:
         """Keep the control connection alive until the exact device ACK arrives.
 
@@ -245,6 +319,26 @@ class BaseusTransport:
 
     async def read(self) -> int:
         return await self._run()
+
+    async def read_registers(
+        self, codes: tuple[str, ...]
+    ) -> dict[str, tuple[int, int]]:
+        async with self._lock:
+            if self._closed:
+                raise BaseusError("Integration unloaded")
+            self._active = asyncio.current_task()
+            try:
+                return await self._query_registers(codes)
+            except asyncio.CancelledError:
+                raise
+            except BaseusError:
+                raise
+            except Exception as err:
+                raise BaseusError(
+                    "Bluetooth transaction failed; telemetry unavailable"
+                ) from err
+            finally:
+                self._active = None
 
     async def set_port(self, port: str, on: bool) -> int:
         return await self._run(port, on)

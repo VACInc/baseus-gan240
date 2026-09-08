@@ -37,7 +37,7 @@ class BaseusSwitch(CoordinatorEntity, SwitchEntity):
     def is_on(self):
         if self.coordinator.data is None or not self.coordinator.last_update_success:
             return None
-        return not bool(self.coordinator.data & PORT_BITS[self._port])
+        return not bool(self.coordinator.data.mask & PORT_BITS[self._port])
 
     async def _set(self, on):
         try:

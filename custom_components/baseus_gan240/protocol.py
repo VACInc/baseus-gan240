@@ -2,6 +2,7 @@
 
 from .const import PORT_BITS
 
+QUERY_HEADER = bytes.fromhex("9AAA03")
 STATUS_HEADER = bytes.fromhex("9AAA0300120201")
 WRITE_HEADER = bytes.fromhex("9AAA10001200010201")
 ACK = bytes.fromhex("9AAA10001200010599")
@@ -20,6 +21,29 @@ def crc16(data: bytes) -> int:
 
 def frame(body: bytes) -> bytes:
     return body + crc16(body).to_bytes(2, "big")
+
+
+def query_frame(code: str) -> bytes:
+    """Build the app's read-register request for a four-digit hex code."""
+    if len(code) != 4:
+        raise ValueError("Register code must contain four hex digits")
+    try:
+        register = bytes.fromhex(code)
+    except ValueError as err:
+        raise ValueError("Register code must contain four hex digits") from err
+    return frame(QUERY_HEADER + register + bytes.fromhex("0001"))
+
+
+def parse_register(data: bytes) -> tuple[str, int, int] | None:
+    """Return register code, scale byte and unsigned value from a strict reply."""
+    if (
+        len(data) != 11
+        or not data.startswith(QUERY_HEADER)
+        or data[5] != 0x02
+        or crc16(data[:-2]) != int.from_bytes(data[-2:], "big")
+    ):
+        return None
+    return data[3:5].hex().upper(), data[6], int.from_bytes(data[7:9], "big")
 
 
 def parse_status(data: bytes) -> int | None:

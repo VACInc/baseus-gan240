@@ -3,12 +3,27 @@ import asyncio
 import pytest
 
 from custom_components.baseus_gan240.const import NOTIFY_UUID, SERVICE_UUID, WRITE_UUID
-from custom_components.baseus_gan240.protocol import ACK, QUERY, STATUS_HEADER, frame
+from custom_components.baseus_gan240.protocol import (
+    ACK,
+    QUERY,
+    STATUS_HEADER,
+    frame,
+    parse_register,
+    query_frame,
+)
 from custom_components.baseus_gan240.transport import BaseusError, BaseusTransport
 
 
 def status(mask):
     return frame(STATUS_HEADER + mask.to_bytes(2, "big"))
+
+
+def register_response(code, scale, value):
+    return frame(
+        bytes.fromhex("9AAA03" + code + "02")
+        + bytes([scale])
+        + value.to_bytes(2, "big")
+    )
 
 
 class FakeClient:
@@ -39,7 +54,7 @@ class FakeClient:
     async def write_gatt_char(self, uuid, payload, response):
         assert uuid == WRITE_UUID and response is False
         loop = asyncio.get_running_loop()
-        if payload == QUERY:
+        if payload.startswith(bytes.fromhex("9AAA03")):
             self.device.queries += 1
             self.device.queried.set()
             # Deliver queued pre-query status while the query write is in flight.
@@ -50,7 +65,13 @@ class FakeClient:
                 self.disconnected(self)
             if not self.device.silent:
                 loop.call_later(0.001, self.callback, None, ACK)
-                loop.call_later(0.002, self.callback, None, status(self.device.mask))
+                code = payload[3:5].hex().upper()
+                reply = (
+                    status(self.device.mask)
+                    if code == "0012"
+                    else register_response(code, *self.device.registers[code])
+                )
+                loop.call_later(0.002, self.callback, None, reply)
         else:
             self.device.writes.append(bytes(payload))
             if self.callback is not None:
@@ -83,6 +104,7 @@ class FakeDevice:
         self.queried = asyncio.Event()
         self.silent = self.drop = self.write_fail = self.mismatch = False
         self.silent_after_write = self.missing = self.disconnect_fail = False
+        self.registers = {"001E": (10, 1234), "000B": (1, 0x8278)}
 
     async def connect(self, disconnected):
         client = FakeClient(self, disconnected)
@@ -91,7 +113,7 @@ class FakeDevice:
 
     def transport(self):
         return BaseusTransport(
-            self.connect, timeout=0.04, connect_timeout=0.04, drain_time=0
+            self.connect, timeout=0.08, connect_timeout=0.08, drain_time=0
         )
 
 
@@ -100,6 +122,27 @@ async def test_read_rejects_queued_and_inflight_stale_frames():
     assert await device.transport().read() == 0xDC03
     assert device.writes == []
     assert all(c.closed for c in device.clients)
+
+
+async def test_read_multiple_registers_on_one_connection():
+    device = FakeDevice()
+    values = await device.transport().read_registers(("0012", "001E", "000B"))
+    assert values == {
+        "0012": (1, device.mask),
+        "001E": (10, 1234),
+        "000B": (1, 0x8278),
+    }
+    assert device.queries == 3
+    assert len(device.clients) == 1 and device.clients[0].closed
+
+
+def test_generic_query_and_response_validation():
+    assert query_frame("0012") == QUERY
+    reply = register_response("001E", 10, 1234)
+    assert parse_register(reply) == ("001E", 10, 1234)
+    assert parse_register(reply[:-1] + b"\x00") is None
+    with pytest.raises(ValueError):
+        query_frame("XYZ")
 
 
 async def test_concurrent_requests_preserve_unknown_and_other_ports():

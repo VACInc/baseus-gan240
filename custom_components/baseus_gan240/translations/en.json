@@ -3,7 +3,7 @@
   "config": {
     "step": {
       "user": {"title": "Connect Baseus BS-GaN240", "description": "Enter the Bluetooth address of your CCGAN240CS charger. An active Bluetooth adapter or ESPHome proxy must be in range. Setup only reads state.", "data": {"address": "Bluetooth address"}},
-      "bluetooth_confirm": {"title": "Connect {name}", "description": "Set up four USB switches for {name}? Setup only reads state."}
+      "bluetooth_confirm": {"title": "Connect {name}", "description": "Set up USB switches and read-only charger telemetry for {name}? Setup only reads state."}
     },
     "error": {"invalid_address": "Enter a Bluetooth address as AA:BB:CC:DD:EE:FF.", "cannot_connect": "No verified status received. Check power, Bluetooth range and available active proxy slots. Close other charger control apps, then retry."},
     "abort": {"already_configured": "This charger is already configured.", "not_supported": "This is not a connectable BS-GaN240 charger."}

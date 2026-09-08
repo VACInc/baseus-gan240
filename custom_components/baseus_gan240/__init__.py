@@ -7,7 +7,7 @@ from homeassistant.core import HomeAssistant
 
 from .coordinator import BaseusCoordinator
 
-PLATFORMS = [Platform.SWITCH]
+PLATFORMS = [Platform.BINARY_SENSOR, Platform.SENSOR, Platform.SWITCH]
 type BaseusConfigEntry = ConfigEntry[BaseusCoordinator]
 
 
