@@ -11,6 +11,7 @@ class BaseusData:
     port_power: dict[str, float] = field(default_factory=dict)
     protocols: dict[str, str] = field(default_factory=dict)
     errors: dict[str, int] = field(default_factory=dict)
+    heavy_load_status: int | None = None
     priority_output: int | None = None
     screen_on: bool | None = None
     child_lock: bool | None = None

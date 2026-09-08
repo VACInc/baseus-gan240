@@ -89,6 +89,7 @@ async def test_all_telemetry_entities_and_decoder(hass, entry):
         "000F": (1, 4),
         "000E": (1, 8),
         "000D": (1, 16),
+        "0013": (1, 17),
         "0014": (1, 3),
         "0016": (1, 0x1234),
         "0015": (1, 0x1234),
@@ -113,6 +114,7 @@ async def test_all_telemetry_entities_and_decoder(hass, entry):
         "a": "Apple 2.4A",
     }
     assert data.errors == {"c1": 1, "c2": 2, "c3": 4, "a": 8, "dc": 16}
+    assert data.heavy_load_status == 17
     assert data.bluetooth_module_version == "1.2.52"
     assert data.dc_module_version == "12.52"
     assert data.screen_on and data.child_lock
@@ -124,7 +126,7 @@ async def test_all_telemetry_entities_and_decoder(hass, entry):
     binary_sensors = []
     await setup_sensors(hass, entry, lambda items: sensors.extend(items))
     await setup_binary_sensors(hass, entry, lambda items: binary_sensors.extend(items))
-    assert len(sensors) == 19
+    assert len(sensors) == 20
     assert len(binary_sensors) == 2
     values = {entity.entity_description.key: entity.native_value for entity in sensors}
     assert values["total_power"] == 123.4

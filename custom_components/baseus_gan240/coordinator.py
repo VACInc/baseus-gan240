@@ -50,6 +50,7 @@ TELEMETRY_CODES = (
     "000F",  # USB-C3 error bitmap
     "000E",  # USB-A error bitmap
     "000D",  # DC error bitmap
+    "0013",  # heavy-load status bitmap
     "0014",  # priority output
     "0016",  # Bluetooth module version
     "0015",  # DC module version
@@ -109,6 +110,7 @@ def decode_data(registers: dict[str, tuple[int, int]]) -> BaseusData:
             "a": _protocol(USB_PROTOCOLS, protocol_two >> 8),
         },
         errors={port: registers[code][1] for code, port in ERROR_CODES.items()},
+        heavy_load_status=registers["0013"][1],
         priority_output=registers["0014"][1],
         screen_on=registers["0024"][1] == 0,
         child_lock=registers["0029"][1] == 1,

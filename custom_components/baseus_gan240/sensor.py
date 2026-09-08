@@ -79,7 +79,6 @@ SENSORS = (
             key=f"{port}_error",
             name=f"{name} error bitmap",
             entity_category=EntityCategory.DIAGNOSTIC,
-            entity_registry_enabled_default=False,
             value_fn=lambda data, port=port: data.errors.get(port),
         )
         for port, name in (
@@ -89,6 +88,12 @@ SENSORS = (
             ("a", "USB A"),
             ("dc", "DC"),
         )
+    ),
+    BaseusSensorDescription(
+        key="heavy_load_status",
+        name="Heavy load status bitmap",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda data: data.heavy_load_status,
     ),
     BaseusSensorDescription(
         key="priority_output",

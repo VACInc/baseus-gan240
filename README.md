@@ -3,8 +3,8 @@
 Local Bluetooth integration for **Baseus CCGAN240CS / BS-GaN240**. Creates four
 switches for USB C1, USB C2, USB C3 and USB A, plus all read-only telemetry
 identified in the vendor app: total and per-output watts, internal temperature,
-negotiated charging protocols, port fault bitmaps, priority output, display and
-child-lock state, and Bluetooth/DC module versions. The protocol does not expose
+negotiated charging protocols, port fault bitmaps, heavy-load and priority-output
+status, display and child-lock state, and Bluetooth/DC module versions. The protocol does not expose
 voltage or current readings, so those are not fabricated from wattage. No cloud
 account, pairing secret, DC switch, restoration or scheduled switching.
 
