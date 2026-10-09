@@ -1,7 +1,7 @@
 {
   "domain": "baseus_gan240",
   "name": "Baseus BS-GaN240",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "bluetooth": [
     {
       "local_name": "BS-GaN240",
@@ -19,6 +19,6 @@
   "integration_type": "device",
   "iot_class": "local_polling",
   "requirements": [
-    "bleak-retry-connector==4.7.0"
+    "bleak-retry-connector>=4.7.0"
   ]
 }

@@ -10,20 +10,21 @@ account, pairing secret, restoration or scheduled switching.
 
 ## Status
 
-Developed against Home Assistant **2026.9.0** and Python 3.14. Unit tests use
+Developed against Home Assistant **2026.9.0**, tested on **2026.10.0**, and Python 3.14. Unit tests use
 real Home Assistant imports with synthetic Bluetooth devices. Hardware status
 and control validation are separate from unit-test coverage.
 
 ## Installation requirements
 
-- Home Assistant 2026.9.0 or later (only 2026.9.0 tested).
+- Home Assistant 2026.9.0 or later (2026.9.0 and 2026.10.0 tested).
 - The built-in Bluetooth integration, with a supported local connectable adapter
   or an already configured ESPHome Bluetooth proxy supporting **active GATT
   connections**, in range and with a free connection slot.
 - Charger powered on. Close the vendor app and other BLE clients when testing;
   simultaneous external controllers are not supported.
-- Dependency `bleak-retry-connector==4.7.0` matches the target HA Bluetooth
-  integration. HA installs it; no separate scanner or direct proxy API is used.
+- Dependency `bleak-retry-connector>=4.7.0` is a floor, not an exact pin, so it
+  follows whatever version the HA Bluetooth integration ships (an exact pin
+  stopped the integration loading on HA 2026.10). HA installs it; no separate scanner or direct proxy API is used.
 
 ## Installation
 
@@ -127,6 +128,7 @@ latency improvement require v0.3.0 live validation.
 - https://developers.home-assistant.io/docs/creating_integration_manifest/
 - https://bleak-retry-connector.readthedocs.io/en/latest/usage.html
 - https://raw.githubusercontent.com/home-assistant/core/2026.9.0/homeassistant/components/bluetooth/manifest.json
+- https://raw.githubusercontent.com/home-assistant/core/2026.10.0/homeassistant/components/bluetooth/manifest.json
 
 Protocol behavior was derived from charger GATT observations and validated
 against the frame fixtures in the test suite. Recorded example masks are not
