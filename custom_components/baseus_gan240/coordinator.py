@@ -7,6 +7,7 @@ from datetime import timedelta
 
 from bleak_retry_connector import BleakClientWithServiceCache, establish_connection
 from homeassistant.components import bluetooth
+from homeassistant.core import callback
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import DOMAIN
@@ -147,10 +148,24 @@ class BaseusCoordinator(DataUpdateCoordinator[BaseusData]):
             except (BaseusError, asyncio.CancelledError) as err:
                 self.async_set_update_error(UpdateFailed("State unverified"))
                 raise err
-            if self.data is None:
-                self.async_set_updated_data(BaseusData(mask=mask))
+            if self.data is None or not self.last_update_success:
+                # HA keeps the last payload after a failed poll/control. Do not
+                # republish that old telemetry as current alongside a fresh mask.
+                self._publish(BaseusData(mask=mask))
             else:
-                self.async_set_updated_data(replace(self.data, mask=mask))
+                self._publish(replace(self.data, mask=mask))
+
+    @callback
+    def _publish(self, data: BaseusData) -> None:
+        """Publish verified state without touching the poll schedule.
+
+        async_set_updated_data() would reschedule the next poll a full interval
+        out, so switching more often than every 60 s starved telemetry polling.
+        """
+        self.data = data
+        self.last_update_success = True
+        self.last_exception = None
+        self.async_update_listeners()
 
     async def async_shutdown(self):
         await self.transport.close()
