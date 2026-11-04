@@ -26,6 +26,8 @@ from .protocol import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+_STATE_UNVERIFIED = "Bluetooth transaction failed; state unverified"
+_TELEMETRY_UNAVAILABLE = "Bluetooth transaction failed; telemetry unavailable"
 
 
 class BaseusError(Exception):
@@ -359,52 +361,36 @@ class BaseusTransport:
                     if result is not None:
                         result.cancel()
 
-    async def _run(self, port: str | None = None, on: bool = False) -> int:
+    async def _locked(
+        self, operation: Callable[[], Awaitable[Any]], failure: str
+    ) -> Any:
+        """Run one complete transaction under the device lock, failing closed."""
         async with self._lock:
             if self._closed:
                 raise BaseusError("Integration unloaded")
             self._active = asyncio.current_task()
             try:
-                if port is None:
-                    return await self._query()
-                return await self._control(port, on)
-            except asyncio.CancelledError:
-                raise
+                return await operation()
             except BaseusError:
                 raise
             except Exception as err:
                 # Do not expose BLE addresses/backend details in HA diagnostics.
-                raise BaseusError(
-                    "Bluetooth transaction failed; state unverified"
-                ) from err
+                raise BaseusError(failure) from err
             finally:
                 self._active = None
 
     async def read(self) -> int:
-        return await self._run()
+        return await self._locked(self._query, _STATE_UNVERIFIED)
 
     async def read_registers(
         self, codes: tuple[str, ...]
     ) -> dict[str, tuple[int, int]]:
-        async with self._lock:
-            if self._closed:
-                raise BaseusError("Integration unloaded")
-            self._active = asyncio.current_task()
-            try:
-                return await self._query_registers(codes)
-            except asyncio.CancelledError:
-                raise
-            except BaseusError:
-                raise
-            except Exception as err:
-                raise BaseusError(
-                    "Bluetooth transaction failed; telemetry unavailable"
-                ) from err
-            finally:
-                self._active = None
+        return await self._locked(
+            lambda: self._query_registers(codes), _TELEMETRY_UNAVAILABLE
+        )
 
     async def set_port(self, port: str, on: bool) -> int:
-        return await self._run(port, on)
+        return await self._locked(lambda: self._control(port, on), _STATE_UNVERIFIED)
 
     async def close(self) -> None:
         """Stop pending I/O; no state restoration or compensating write."""
