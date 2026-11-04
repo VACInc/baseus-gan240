@@ -24,5 +24,9 @@ async def async_get_config_entry_diagnostics(hass, entry):
             }.items()
             if value is not None
         ),
-        "poll_interval_seconds": 60,
+        "poll_interval_seconds": (
+            coordinator.update_interval.total_seconds()
+            if coordinator.update_interval is not None
+            else None
+        ),
     }
