@@ -100,6 +100,41 @@ own disable bit is clear; the integration preserves rather than interprets it.
 Switch state represents protocol disable bits, not measured voltage delivery.
 Power sensors are separate register readings reported by the charger.
 
+## Security model
+
+- **The charger's BLE protocol has no authentication, pairing or
+  encryption.** Any BLE client in radio range can read the mask and
+  telemetry and switch every output, including DC, exactly as this
+  integration does. Home Assistant cannot prevent that. Do not rely on these
+  switches as a safety interlock, and do not power loads where an unexpected
+  on/off by a nearby device would be dangerous.
+- The integration never stores anything beyond the Bluetooth address in the
+  config entry, needs no account or secret, and makes no network requests.
+- Diagnostics are allowlisted: no Bluetooth address, adapter, identifier or
+  raw exception text. Integration log lines contain only a constant stage and
+  error category.
+- Home Assistant's own `bluetooth`, `bleak` and `bleak_retry_connector`
+  debug logs **do** contain Bluetooth addresses. Redact them before sharing
+  logs publicly.
+- Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
+
+## Troubleshooting
+
+- *"No verified status received"* during setup: the charger is off, out of
+  range, or every active proxy/adapter connection slot is in use. Close the
+  vendor app and other BLE clients, then retry.
+- Entities unavailable after a switch command: the command could not be
+  verified. It is not retried; entities recover on the next successful poll
+  (at most 60 seconds).
+- For debug logs add the following to `configuration.yaml`, reproduce, then
+  remove it and redact addresses before sharing:
+
+  ```yaml
+  logger:
+    logs:
+      custom_components.baseus_gan240: debug
+  ```
+
 ## Tests
 
 ```sh
