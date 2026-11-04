@@ -680,3 +680,86 @@ async def test_valid_gatt_keeps_service_cache():
         await BaseusTransport(connect, timeout=0.08, drain_time=0).read() == device.mask
     )
     assert cleared == []
+
+
+@pytest.mark.parametrize("fault", ["silent", "drop", "missing"])
+async def test_register_read_failures_are_baseus_errors(fault, caplog):
+    device = FakeDevice()
+    setattr(device, fault, True)
+    with pytest.raises(BaseusError):
+        await device.transport().read_registers(("001E", "000B"))
+    assert all(c.closed for c in device.clients)
+    assert not device.writes
+    assert "AA:BB" not in caplog.text
+
+
+async def test_register_disconnect_callback_fails_closed():
+    device = FakeDevice()
+
+    async def connect(callback):
+        client = await device.connect(callback)
+        original_write = client.write_gatt_char
+
+        async def write(uuid, payload, response):
+            await original_write(uuid, payload, response)
+            callback(client)  # Loss reported while the client still looks up.
+
+        client.write_gatt_char = write
+        return client
+
+    with pytest.raises(BaseusError, match="[Dd]isconnected"):
+        await BaseusTransport(connect, timeout=0.04, drain_time=0).read_registers(
+            ("001E",)
+        )
+    assert device.queries == 1
+    assert all(c.closed for c in device.clients)
+
+
+async def test_register_backend_error_is_wrapped_without_details(caplog):
+    device = FakeDevice()
+
+    async def connect(callback):
+        client = await device.connect(callback)
+
+        async def write(*_args, **_kwargs):
+            raise OSError("AA:BB:CC:DD:EE:FF backend detail")
+
+        client.write_gatt_char = write
+        return client
+
+    with pytest.raises(BaseusError, match="telemetry unavailable") as raised:
+        await BaseusTransport(connect, timeout=0.04, drain_time=0).read_registers(
+            ("001E",)
+        )
+    assert "AA:BB" not in str(raised.value)
+    assert "stage=register_write category=backend" in caplog.text
+    assert "AA:BB" not in caplog.text
+    assert all(c.closed for c in device.clients)
+
+
+async def test_read_registers_after_close_is_rejected():
+    device = FakeDevice()
+    transport = device.transport()
+    await transport.close()
+    with pytest.raises(BaseusError, match="unloaded"):
+        await transport.read_registers(("001E",))
+    assert device.clients == []
+
+
+async def test_read_disconnect_callback_fails_closed():
+    device = FakeDevice()
+
+    async def connect(callback):
+        client = await device.connect(callback)
+        original_write = client.write_gatt_char
+
+        async def write(uuid, payload, response):
+            await original_write(uuid, payload, response)
+            callback(client)
+
+        client.write_gatt_char = write
+        return client
+
+    with pytest.raises(BaseusError, match="[Dd]isconnected"):
+        await BaseusTransport(connect, timeout=0.04, drain_time=0).read()
+    assert all(c.closed for c in device.clients)
