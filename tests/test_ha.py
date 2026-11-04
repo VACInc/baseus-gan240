@@ -1,3 +1,4 @@
+from datetime import timedelta
 from types import MappingProxyType, SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -64,6 +65,11 @@ async def test_switches_and_diagnostics(hass, entry):
     diagnostics = await async_get_config_entry_diagnostics(hass, entry)
     assert "AA:BB" not in str(diagnostics)
     assert diagnostics["disable_mask"] == 0xDC27
+    assert diagnostics["poll_interval_seconds"] == 60
+    coordinator.update_interval = timedelta(seconds=90)
+    assert (await async_get_config_entry_diagnostics(hass, entry))[
+        "poll_interval_seconds"
+    ] == 90
     coordinator.async_set_update_error(UpdateFailed("failure"))
     assert all(not e.available and e.is_on is None for e in entities)
     assert (await async_get_config_entry_diagnostics(hass, entry))[
