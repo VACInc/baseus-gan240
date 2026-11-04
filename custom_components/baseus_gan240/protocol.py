@@ -1,5 +1,7 @@
 """Strict, stateless Baseus frames. Never interpret acknowledgements as state."""
 
+import re
+
 from .const import PORT_BITS
 
 QUERY_HEADER = bytes.fromhex("9AAA03")
@@ -7,6 +9,7 @@ STATUS_HEADER = bytes.fromhex("9AAA0300120201")
 WRITE_HEADER = bytes.fromhex("9AAA10001200010201")
 ACK = bytes.fromhex("9AAA10001200010599")
 QUERY = bytes.fromhex("9AAA0300120001C61C")
+_REGISTER_CODE = re.compile(r"[0-9A-Fa-f]{4}")
 
 
 def crc16(data: bytes) -> int:
@@ -23,14 +26,20 @@ def frame(body: bytes) -> bytes:
     return body + crc16(body).to_bytes(2, "big")
 
 
+def normalize_register_code(code: str) -> str:
+    """Return the canonical upper-case form of a four-hex-digit register code.
+
+    bytes.fromhex() skips whitespace, so a length check alone would let " 12 "
+    through as a one-byte register and emit a malformed, undocumented request.
+    """
+    if not isinstance(code, str) or not _REGISTER_CODE.fullmatch(code):
+        raise ValueError("Register code must contain four hex digits")
+    return code.upper()
+
+
 def query_frame(code: str) -> bytes:
     """Build the app's read-register request for a four-digit hex code."""
-    if len(code) != 4:
-        raise ValueError("Register code must contain four hex digits")
-    try:
-        register = bytes.fromhex(code)
-    except ValueError as err:
-        raise ValueError("Register code must contain four hex digits") from err
+    register = bytes.fromhex(normalize_register_code(code))
     return frame(QUERY_HEADER + register + bytes.fromhex("0001"))
 
 

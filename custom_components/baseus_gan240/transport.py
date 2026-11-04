@@ -18,6 +18,7 @@ from .protocol import (
     ACK,
     QUERY,
     mutate_mask,
+    normalize_register_code,
     parse_register,
     parse_status,
     query_frame,
@@ -180,6 +181,9 @@ class BaseusTransport:
         self, codes: tuple[str, ...]
     ) -> dict[str, tuple[int, int]]:
         """Read several registers over one owned subscription and connection."""
+        # Validate before connecting: a bad code must not cost a BLE connection
+        # or proxy slot, and replies are matched against the canonical code.
+        codes = tuple(normalize_register_code(code) for code in codes)
         async with self._connection() as (client, disconnected):
             accepting = False
             expected: str | None = None
