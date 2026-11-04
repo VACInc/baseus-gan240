@@ -147,7 +147,9 @@ class BaseusCoordinator(DataUpdateCoordinator[BaseusData]):
             except (BaseusError, asyncio.CancelledError) as err:
                 self.async_set_update_error(UpdateFailed("State unverified"))
                 raise err
-            if self.data is None:
+            if self.data is None or not self.last_update_success:
+                # HA keeps the last payload after a failed poll/control. Do not
+                # republish that old telemetry as current alongside a fresh mask.
                 self.async_set_updated_data(BaseusData(mask=mask))
             else:
                 self.async_set_updated_data(replace(self.data, mask=mask))
