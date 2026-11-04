@@ -382,4 +382,27 @@ async def test_control_does_not_postpone_telemetry_poll(hass, entry):
     assert coordinator._unsub_refresh is scheduled
     assert updates == [4]
     unsubscribe()
+
+
+async def test_entity_identity_is_stable_and_shared(hass, entry):
+    coordinator = BaseusCoordinator(hass, entry)
+    entry.runtime_data = coordinator
+    coordinator.async_set_updated_data(BaseusData(mask=0, total_power=1.0))
+    entities = []
+    for setup in (setup_switches, setup_sensors, setup_binary_sensors):
+        await setup(hass, entry, lambda items: entities.extend(items))
+    unique_ids = {entity.unique_id for entity in entities}
+    assert len(unique_ids) == len(entities) == 27
+    # Registry keys must not change across refactors.
+    assert {"AA:BB:CC:DD:EE:FF_c1", "AA:BB:CC:DD:EE:FF_total_power"} <= unique_ids
+    assert "AA:BB:CC:DD:EE:FF_child_lock" in unique_ids
+    assert all(entity.has_entity_name for entity in entities)
+    device_infos = {repr(sorted(entity.device_info.items())) for entity in entities}
+    assert len(device_infos) == 1
+    coordinator.async_set_update_error(UpdateFailed("failure"))
+    assert all(
+        getattr(entity, "native_value", None) is None
+        and (not hasattr(entity, "is_on") or entity.is_on is None)
+        for entity in entities
+    )
     await coordinator.async_shutdown()

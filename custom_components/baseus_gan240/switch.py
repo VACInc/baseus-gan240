@@ -2,10 +2,9 @@
 
 from homeassistant.components.switch import SwitchEntity, SwitchEntityDescription
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers.device_registry import CONNECTION_BLUETOOTH, DeviceInfo
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, MODEL, PORT_BITS
+from .const import DOMAIN, PORT_BITS
+from .entity import BaseusEntity
 from .transport import BaseusError
 
 
@@ -15,29 +14,19 @@ async def async_setup_entry(hass, entry, async_add_entities):
     )
 
 
-class BaseusSwitch(CoordinatorEntity, SwitchEntity):
-    _attr_has_entity_name = True
-
+class BaseusSwitch(BaseusEntity, SwitchEntity):
     def __init__(self, coordinator, entry, port):
-        super().__init__(coordinator)
+        super().__init__(coordinator, entry, port)
         self.entity_description = SwitchEntityDescription(
             key=port, translation_key=port
         )
         self._port = port
-        self._attr_unique_id = f"{entry.unique_id}_{port}"
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, entry.unique_id)},
-            connections={(CONNECTION_BLUETOOTH, entry.data["address"])},
-            manufacturer="Baseus",
-            model=MODEL,
-            name="Baseus BS-GaN240",
-        )
 
     @property
     def is_on(self):
-        if self.coordinator.data is None or not self.coordinator.last_update_success:
+        if (data := self.verified_data) is None:
             return None
-        return not bool(self.coordinator.data.mask & PORT_BITS[self._port])
+        return not bool(data.mask & PORT_BITS[self._port])
 
     async def _set(self, on):
         try:
