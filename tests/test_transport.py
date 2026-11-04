@@ -1,4 +1,5 @@
 import asyncio
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -632,3 +633,50 @@ async def test_invalid_register_code_fails_before_connecting():
     with pytest.raises(BaseusError):
         await device.transport().read_registers(("001E", " 12 "))
     assert device.clients == [] and device.queries == 0
+
+
+@pytest.mark.parametrize("fault", ["service", "characteristic"])
+@pytest.mark.parametrize("clear_result", ["ok", "error", "hang", "absent"])
+async def test_missing_gatt_clears_service_cache(fault, clear_result, caplog):
+    device = FakeDevice()
+    device.missing = fault == "service"
+    cleared = []
+
+    async def connect(callback):
+        client = await device.connect(callback)
+        if fault == "characteristic":
+            client.properties = ["read"]
+        if clear_result != "absent":
+
+            async def clear_cache():
+                cleared.append(client.is_connected)
+                if clear_result == "error":
+                    raise OSError("AA:BB:CC:DD:EE:FF")
+                if clear_result == "hang":
+                    await asyncio.Event().wait()
+                return True
+
+            client.clear_cache = clear_cache
+        return client
+
+    with pytest.raises(BaseusError, match="missing"):
+        await BaseusTransport(connect, timeout=0.02, drain_time=0).read()
+    assert cleared == ([] if clear_result == "absent" else [True])
+    assert all(c.closed for c in device.clients)
+    assert not device.queries and not device.writes
+    assert "AA:BB" not in caplog.text
+
+
+async def test_valid_gatt_keeps_service_cache():
+    device = FakeDevice()
+    cleared = []
+
+    async def connect(callback):
+        client = await device.connect(callback)
+        client.clear_cache = AsyncMock(side_effect=lambda: cleared.append(True))
+        return client
+
+    assert (
+        await BaseusTransport(connect, timeout=0.08, drain_time=0).read() == device.mask
+    )
+    assert cleared == []

@@ -109,6 +109,7 @@ class BaseusTransport:
                     raise BaseusError("Charger disconnected during establishment")
                 service = client.services.get_service(SERVICE_UUID)
                 if service is None:
+                    await self._clear_gatt_cache(client)
                     raise BaseusError("Required charger service missing")
                 write = service.get_characteristic(WRITE_UUID)
                 notify = service.get_characteristic(NOTIFY_UUID)
@@ -118,6 +119,7 @@ class BaseusTransport:
                     or "write-without-response" not in write.properties
                     or "notify" not in notify.properties
                 ):
+                    await self._clear_gatt_cache(client)
                     raise BaseusError("Required charger characteristics missing")
             yield client, disconnected
         finally:
@@ -125,6 +127,23 @@ class BaseusTransport:
                 # Disconnect also removes subscriptions and releases proxy slots.
                 # Failure is not suppressed: do not proceed to another connection.
                 await _await_owned(asyncio.create_task(self._disconnect(client)))
+
+    async def _clear_gatt_cache(self, client) -> None:
+        """Drop a possibly stale cached GATT table before failing.
+
+        BleakClientWithServiceCache reuses discovered services across
+        connections. Without this, one incomplete or outdated discovery would
+        make every later connection fail validation until HA restarts.
+        Best effort: the transaction still fails closed either way.
+        """
+        clear_cache = getattr(client, "clear_cache", None)
+        if clear_cache is None:
+            return
+        try:
+            async with asyncio.timeout(self._timeout):
+                await clear_cache()
+        except Exception:  # Never mask the validation failure.
+            _LOGGER.warning("Bluetooth GATT cache clear failed")
 
     async def _disconnect(self, client) -> None:
         async with self._stage("disconnect"), asyncio.timeout(self._timeout):
