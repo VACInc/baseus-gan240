@@ -619,3 +619,16 @@ async def test_cancel_while_waiting_control_ack_releases_connection():
         await operation
     assert len(device.writes) == 1
     assert all(client.closed for client in device.clients)
+
+
+async def test_register_codes_are_normalized_before_matching_replies():
+    device = FakeDevice()
+    values = await device.transport().read_registers(("001e",))
+    assert values == {"001E": (10, 1234)}
+
+
+async def test_invalid_register_code_fails_before_connecting():
+    device = FakeDevice()
+    with pytest.raises(BaseusError):
+        await device.transport().read_registers(("001E", " 12 "))
+    assert device.clients == [] and device.queries == 0

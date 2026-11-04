@@ -7,7 +7,9 @@ from custom_components.baseus_gan240.protocol import (
     crc16,
     frame,
     mutate_mask,
+    normalize_register_code,
     parse_status,
+    query_frame,
     write_frame,
 )
 
@@ -72,3 +74,17 @@ def test_all_16_bit_mutations(port, bit, on):
 def test_invalid_mask(mask):
     with pytest.raises(ValueError):
         mutate_mask(mask, "c1", True)
+
+
+@pytest.mark.parametrize(
+    "code", ["XYZ", "", "00123", " 12 ", "12  ", "0x12", "00 12", "١٢٣٤", None, 18]
+)
+def test_query_frame_rejects_non_canonical_codes(code):
+    with pytest.raises(ValueError):
+        query_frame(code)
+
+
+def test_query_frame_normalizes_case():
+    assert query_frame("001e") == query_frame("001E")
+    assert normalize_register_code("001e") == "001E"
+    assert all(len(query_frame(f"{n:04X}")) == 9 for n in range(0, 0x10000, 0x111))
