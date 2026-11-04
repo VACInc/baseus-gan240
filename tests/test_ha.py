@@ -360,3 +360,26 @@ async def test_control_keeps_telemetry_when_last_poll_succeeded(hass, entry):
     assert coordinator.data.mask == 4
     assert coordinator.data.total_power == 12.5
     await coordinator.async_shutdown()
+
+
+async def test_control_does_not_postpone_telemetry_poll(hass, entry):
+    coordinator = BaseusCoordinator(hass, entry)
+    coordinator.transport = SimpleNamespace(
+        set_port=AsyncMock(return_value=4),
+        read_registers=AsyncMock(),
+        close=AsyncMock(),
+    )
+    coordinator.async_set_updated_data(BaseusData(mask=0))
+    unsubscribe = coordinator.async_add_listener(lambda: None)
+    scheduled = coordinator._unsub_refresh
+    assert scheduled is not None
+    updates = []
+    coordinator.async_add_listener(lambda: updates.append(coordinator.data.mask))
+
+    await coordinator.set_port("c1", False)
+
+    # Frequent switching must not keep pushing the 60 s telemetry poll back.
+    assert coordinator._unsub_refresh is scheduled
+    assert updates == [4]
+    unsubscribe()
+    await coordinator.async_shutdown()
